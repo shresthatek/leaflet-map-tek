@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Full Interactive Leaflet Map — Routing + Earthquakes + Instructions</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
+
+  <style>
+    body{margin:0;font-family:Arial}
+
+    #controls{padding:8px;background:#eee;display:flex;gap:10px;align-items:center}
+    #map{height:calc(100vh - 60px)}
+
+    /* Turn-by-turn panel */
+    #instructions{
+      position:absolute;bottom:20px;left:20px;
+      width:360px;background:white;color:#000;padding:12px;
+      border-radius:8px;box-shadow:0 4px 10px rgba(0,0,0,0.25);
+      z-index:2000;max-height:300px;overflow:auto;
+    }
+
+    .distanceTotal{font-weight:bold;margin-bottom:8px}
+    .step{padding:4px 0;border-bottom:1px solid #ddd}
+
+    /* Earthquake legend */
+    .legend{background:white;padding:8px;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.2);
+      z-index:3000;position:relative}
+  </style>
+</head>
+<body>
+<div id="controls">
+  <input id="startInput" placeholder="Start" />
+  <input id="destInput" placeholder="Destination" />
+  <button id="routeBtn">Find Route</button>
+  <span id="distanceBox"></span>
+</div>
+<div id="map"></div>
+<div id="instructions"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+<script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+
+<script>
+const map=L.map('map').setView([27.7,85.33],11);
+const osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+const markerGroup=L.layerGroup().addTo(map);
+const geojsonGroup=L.layerGroup().addTo(map);
+const quakeGroup=L.layerGroup().addTo(map);
+const routeGroup=L.layerGroup().addTo(map);
+
+markerGroup.addLayer(L.marker([27.7,85.33]).bindPopup('Marker 1'));
+markerGroup.addLayer(L.marker([27.74,85.32]).bindPopup('Marker 2'));
+markerGroup.addLayer(L.marker([27.72,85.36]).bindPopup('Marker 3'));
+
+fetch('data.geojson').then(r=>r.json()).then(d=>geojsonGroup.addLayer(L.geoJSON(d)));
+
+// Earthquakes
+function eqColor(m){if(m<2)return '#ffea00';if(m<4)return '#ff9800';return '#d32f2f';}
+function eqRadius(m){return Math.max(4,m*3);} 
+
+function loadEq(){
+  quakeGroup.clearLayers();
+  axios.get('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson').then(res=>{
+    L.geoJSON(res.data,{pointToLayer:(f,latlng)=>L.circleMarker(latlng,{radius:eqRadius(f.properties.mag),fillColor:eqColor(f.properties.mag),color:'#333',fillOpacity:0.8}),onEachFeature:(f,l)=>l.bindPopup(`Mag ${f.properties.mag}<br>${f.properties.place}`)}).addTo(quakeGroup);
+  });
+}
+loadEq();
+
+// Layer control
+const baseLayers={"OpenStreetMap":osm};
+const overlays={"Markers":markerGroup,"GeoJSON":geojsonGroup,"Earthquakes":quakeGroup,"Route":routeGroup};
+L.control.layers(baseLayers,overlays,{collapsed:false}).addTo(map);
+
+// Legend
+const legend=L.control({position:'bottomright'});
+legend.onAdd=function(){
+  const div=L.DomUtil.create('div','legend');
+  div.innerHTML=`<b>Earthquake magnitude</b><br>
+  <span style='display:inline-block;width:12px;height:12px;background:#ffea00;margin-right:6px;'></span><2<br>
+  <span style='display:inline-block;width:12px;height:12px;background:#ff9800;margin-right:6px;'></span>2–3.9<br>
+  <span style='display:inline-block;width:12px;height:12px;background:#d32f2f;margin-right:6px;'></span>≥4`;
+  return div;
+};
+legend.addTo(map);
+
+// Routing
+let routingControl=null;let animMarker=null;
+async function geocode(t){const url='https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(t);const r=await fetch(url);const j=await r.json();return j.length?L.latLng(j[0].lat,j[0].lon):null;}
+
+function showInst(route){const p=document.getElementById('instructions');p.innerHTML='';const tot=(route.summary.totalDistance/1000).toFixed(2);const d=document.createElement('div');d.className='distanceTotal';d.innerText='Total: '+tot+' km';p.appendChild(d);route.instructions.forEach(s=>{const div=document.createElement('div');div.className='step';div.innerHTML=`<b>➡ ${s.text}</b><br><span style='font-size:12px;color:#555;'>${(s.distance||0).toFixed(0)} m</span>`;p.appendChild(div);});}
+
+async function routeNow(){const s=document.getElementById('startInput').value;const d=document.getElementById('destInput').value;const sLL=await geocode(s);const dLL=await geocode(d);if(!sLL||!dLL)return;if(routingControl)map.removeControl(routingControl);routingControl=L.Routing.control({waypoints:[sLL,dLL],show:false,lineOptions:{styles:[{color:'blue',weight:5}]}}).on('routesfound',e=>{const r=e.routes[0];showInst(r);const coords=r.coordinates;if(animMarker)map.removeLayer(animMarker);animMarker=L.circleMarker(coords[0],{radius:8,fillColor:'cyan',color:'#fff'}).addTo(map);let i=0;function mv(){if(i<coords.length){animMarker.setLatLng(coords[i]);i++;requestAnimationFrame(mv);}}mv();}).addTo(map);} 
+
+document.getElementById('routeBtn').onclick=routeNow;
+</script>
+</body>
+</html>
